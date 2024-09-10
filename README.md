@@ -15,3 +15,8 @@ To install the required dependencies:
 ```bash
 pip install -r requirements.txt
 ```
+
+To download the dataset from Kaggle:
+```bash
+./download_dataset.sh
+```
