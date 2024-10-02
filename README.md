@@ -1,5 +1,7 @@
 # Stroke Detection
 
+Link to the [Stroke Detection dataset](https://www.kaggle.com/datasets/fedesoriano/stroke-prediction-dataset/code).
+
 ## Environment setup
 To create a Python virtual environment for the project:
 ```bash
