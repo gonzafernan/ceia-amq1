@@ -1,6 +1,7 @@
 .venv
 *.csv
 *.pth
+*.zip
 data/
 
 # python
