@@ -50,8 +50,10 @@ with DAG(
         import pandas as pd
         import os
 
+        SERVER_HOST_DATASET_IP = "192.168.1.185:12000"
+
         dataset_zip_name = "stroke-prediction-dataset"
-        dataset_url = f"http://192.168.1.185:12000/{dataset_zip_name}.zip"
+        dataset_url = f"http://{SERVER_HOST_DATASET_IP}/{dataset_zip_name}.zip" # to update
         dataset_csv_name = "healthcare-dataset-stroke-data"
         dataset_s3_path = f"s3://data/raw/{dataset_csv_name}.csv"
 
@@ -67,11 +69,11 @@ with DAG(
     )
     def make_dummies_variables():
         """Convert categorical variables into one-hot encoding."""
-        # import json
+        import json
         import datetime
 
-        # import boto3
-        # import botocore.exceptions
+        import boto3
+        import botocore.exceptions
         import mlflow
 
         import awswrangler as wr
@@ -95,6 +97,7 @@ with DAG(
         df["bmi"].fillna(df["bmi"].median(), inplace=True)
 
         # Cathegoric variables transformation
+        encoded_columns = []
         print("Applying One-Hot encoding to:")
         df_dummies = df.copy()
         for label, to_drop in [
@@ -112,51 +115,46 @@ with DAG(
             )
             df_dummies.drop(label, axis=1, inplace=True)
             df_dummies = df_dummies.join(one_hot)
+            one_hot_columns = [
+                prefix + "_" + value for value in unique_values if value != to_drop
+            ]
+            encoded_columns.extend(one_hot_columns)
 
         wr.s3.to_csv(df=df_dummies, path=dataset_dummies_path, index=False)
 
         # Save information of the dataset
-        # client = boto3.client('s3')
+        client = boto3.client('s3')
 
-        # data_dict = {}
-        # try:
-        #     client.head_object(Bucket='data', Key='data_info/data.json')
-        #     result = client.get_object(Bucket='data', Key='data_info/data.json')
-        #     text = result["Body"].read().decode()
-        #     data_dict = json.loads(text)
-        # except botocore.exceptions.ClientError as e:
-        #     if e.response['Error']['Code'] != "404":
-        #         # Something else has gone wrong.
-        #         raise e
+        data_dict = {}
+        try:
+            client.head_object(Bucket='data', Key='data_info/data.json')
+            result = client.get_object(Bucket='data', Key='data_info/data.json')
+            text = result["Body"].read().decode()
+            data_dict = json.loads(text)
+        except botocore.exceptions.ClientError as e:
+            if e.response['Error']['Code'] != "404":
+                # Something else has gone wrong.
+                raise e
 
-        # target_col = Variable.get("stroke")
-        # dataset_log = df.drop(columns=target_col)
-        # dataset_with_dummies_log = df_dummies.drop(columns=target_col)
+        dataset_log = df.drop(columns="stroke")
+        dataset_with_dummies_log = df_dummies.drop(columns="stroke")
 
-        # # Upload JSON String to an S3 Object
-        # data_dict['columns'] = dataset_log.columns.to_list()
-        # data_dict['columns_after_dummy'] = dataset_with_dummies_log.columns.to_list()
-        # data_dict['target_col'] = target_col
-        # data_dict['categorical_columns'] = categories_list
-        # data_dict['columns_dtypes'] = {k: str(v) for k, v in dataset_log.dtypes.to_dict().items()}
-        # data_dict['columns_dtypes_after_dummy'] = {k: str(v) for k, v in dataset_with_dummies_log.dtypes
-        #  .to_dict()
-        #  .items()}
+        # Upload JSON String to an S3 Object
+        data_dict['columns'] = dataset_log.columns.to_list()
+        data_dict['columns_after_dummy'] = dataset_with_dummies_log.columns.to_list()
+        data_dict['target_col'] = "stroke"
+        data_dict['columns_dtypes'] = {k: str(v) for k, v in dataset_log.dtypes.to_dict().items()}
+        data_dict['columns_dtypes_after_dummy'] = {k: str(v) for k, v in dataset_with_dummies_log.dtypes.to_dict().items()}
+        data_dict['categorical_columns'] = encoded_columns
 
-        #     category_dummies_dict = {}
-        #     for category in categories_list:
-        #         category_dummies_dict[category] = np.sort(dataset_log[category].unique()).tolist()
+        data_dict['date'] = datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S"')
+        data_string = json.dumps(data_dict, indent=2)
 
-        #     data_dict['categories_values_per_categorical'] = category_dummies_dict
-
-        #     data_dict['date'] = datetime.datetime.today().strftime('%Y/%m/%d-%H:%M:%S"')
-        #     data_string = json.dumps(data_dict, indent=2)
-
-        #     client.put_object(
-        #         Bucket='data',
-        #         Key='data_info/data.json',
-        #         Body=data_string
-        #     )
+        client.put_object(
+            Bucket='data',
+            Key='data_info/data.json',
+            Body=data_string
+        )
 
         mlflow.set_tracking_uri("http://mlflow:5000")
         experiment = mlflow.set_experiment("ETL Stroke Prediction")
@@ -202,9 +200,8 @@ with DAG(
 
         dataset = wr.s3.read_csv(dataset_dummies_path)
 
-        # test_size = Variable.get("test_size_heart")
+        # would be nice to have it as airflow variable
         test_size = 0.2
-        # target_col = Variable.get("stroke")
         target_col = "stroke"
 
         X = dataset.drop(columns=target_col)
@@ -217,9 +214,6 @@ with DAG(
         X_train, X_test, y_train, y_test = train_test_split(
             X_smote, y_smote, test_size=test_size, stratify=y_smote, random_state=42
         )
-
-        # Clean duplicates
-        # dataset.drop_duplicates(inplace=True, ignore_index=True)
 
         save_to_csv(X_train, f"s3://data/final/train/{dataset_csv_name}_X_train.csv")
         save_to_csv(X_test, f"s3://data/final/test/{dataset_csv_name}_X_test.csv")
@@ -235,10 +229,10 @@ with DAG(
         """
         Standardization of numerical columns
         """
-        # import json
+        import json
         import mlflow
-        # import boto3
-        # import botocore.exceptions
+        import boto3
+        import botocore.exceptions
 
         import awswrangler as wr
         import pandas as pd
@@ -263,24 +257,24 @@ with DAG(
         save_to_csv(X_train, f"s3://data/final/train/{dataset_csv_name}_X_train.csv")
         save_to_csv(X_test, f"s3://data/final/test/{dataset_csv_name}_X_test.csv")
 
-    #     # Save information of the dataset
-    #     client = boto3.client("s3")
+        # Save information of the dataset
+        client = boto3.client("s3")
 
-    #     try:
-    #         client.head_object(Bucket="data", Key="data_info/data.json")
-    #         result = client.get_object(Bucket="data", Key="data_info/data.json")
-    #         text = result["Body"].read().decode()
-    #         data_dict = json.loads(text)
-    #     except botocore.exceptions.ClientError as e:
-    #         # Something else has gone wrong.
-    #         raise e
+        try:
+            client.head_object(Bucket="data", Key="data_info/data.json")
+            result = client.get_object(Bucket="data", Key="data_info/data.json")
+            text = result["Body"].read().decode()
+            data_dict = json.loads(text)
+        except botocore.exceptions.ClientError as e:
+            # Something else has gone wrong.
+            raise e
 
-    #     # Upload JSON String to an S3 Object
-    #     data_dict["standard_scaler_mean"] = sc_X.mean_.tolist()
-    #     data_dict["standard_scaler_std"] = sc_X.scale_.tolist()
-    #     data_string = json.dumps(data_dict, indent=2)
+        # Upload JSON String to an S3 Object
+        data_dict["standard_scaler_mean"] = scaler.mean_.tolist()
+        data_dict["standard_scaler_std"] = scaler.scale_.tolist()
+        data_string = json.dumps(data_dict, indent=2)
 
-    #     client.put_object(Bucket="data", Key="data_info/data.json", Body=data_string)
+        client.put_object(Bucket="data", Key="data_info/data.json", Body=data_string)
 
         mlflow.set_tracking_uri("http://mlflow:5000")
         experiment = mlflow.set_experiment("ETL Stroke Prediction")
@@ -294,5 +288,6 @@ with DAG(
             mlflow.log_param("Standard Scaler feature names", scaler.feature_names_in_)
             mlflow.log_param("Standard Scaler mean values", scaler.mean_)
             mlflow.log_param("Standard Scaler scale values", scaler.scale_)
+            mlflow.sklearn.log_model(scaler, artifact_path="models/scaler")
 
     fetch_save_dataset() >> make_dummies_variables() >> split_dataset() >> normalize_data()
